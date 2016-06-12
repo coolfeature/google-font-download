@@ -46,6 +46,8 @@ set -euo pipefail
 css="font.css"
 lang="latin"
 format="all"
+path=""
+destination=""
 url="https://fonts.googleapis.com/css"
 
 # Usage message
@@ -84,6 +86,15 @@ usage() {
 		    Write the generated CSS into OUTPUT. The file will be
 		    overwritten and will be created if it doesn't exist. The
 		    default is \`$css'.
+
+		  -p PATH PREFIX, --path=PATH
+		    Prefix appended to paths in the generated CSS file. The
+		    default is \`$path'.
+
+		  -d DESTINATION, --destination=DESTINATION
+		    Prefix appended to paths in the generated CSS file. The
+		    default is \`$destination'.
+
 
 		POSITIONAL ARGUMENTS
 		  This script accepts an arbitrary number of font specs. A font
@@ -129,7 +140,7 @@ fi
 # Parse options
 if [ $modern_getopt -eq 1 ]; then
 	ret=0
-	temp=$(getopt -o f:hl:o: --long format:,help,languages:,output -n "${0:-google-font-download}" -- "$@") || ret=$?
+	temp=$(getopt -o f:hl:o:p:d: --long format:,help,languages:,output:,path:,destination: -n "${0:-google-font-download}" -- "$@") || ret=$?
 	if [ $ret -ne 0 ]; then
 		echo >&2
 		usage
@@ -176,6 +187,14 @@ while true; do
 			;;
 		-o|--output)
 			css=$2
+			shift 2
+			;;
+		-p|--path)
+			path=$2
+			shift 2
+			;;
+		-d|--destination)
+			destination=$2
 			shift 2
 			;;
 		--)
@@ -229,7 +248,6 @@ elif [ "$css" = "-" ]; then
 	css=/dev/stdout
 fi
 
-
 # Check whether sed is GNU or BSD sed, or rather, which parameter enables extended regex support. Note that GNU sed does
 # have -E as an undocumented compatibility option on some systems.
 if [ "$(echo "test" | sed -E 's/([st]+)$/xx\1/' 2>/dev/null)" == "texxst" ]; then
@@ -254,8 +272,13 @@ useragent[svg]='Mozilla/4.0 (iPad; CPU OS 4_0_1 like Mac OS X) AppleWebKit/534.4
 # shellcheck disable=SC2154
 useragent[ttf]='Mozilla/5.0 (Windows NT 6.1) AppleWebKit/534.54.16 (KHTML, like Gecko) Version/5.1.4 Safari/534.54.16'
 
+# create the destination folder if it does not exist
+if [ ! -d "$destination" ]; then
+  mkdir $destination
+fi
+
 # Clear the output file
->"$css"
+#>"$css"
 
 # Loop over the fonts, and download them one-by-one
 errors=0
@@ -277,6 +300,8 @@ for family in "${families[@]}"; do
 	fontnameescaped=$(echo "$family" | $ESED 's/( |:)/_/g')
 	fontstyle=$(echo "$family" | awk -F : '{print $2}')
 	fontweight=$(echo "$fontstyle" | $ESED 's/italic$//g')
+	pathprefix=$(echo "$path")
+	destpath=$(echo "$destination")
 
 	numfontweight=$(echo "$fontweight" | tr -Cd ',')
 	if [ ${#numfontweight} -ge 1 ]; then
@@ -300,8 +325,24 @@ for family in "${families[@]}"; do
 
 	# Either bold, a number, or empty. If empty, default to "normal".
 	printf >>"$css" "\tfont-weight: %s;\n" "${fontweight:-normal}"
-	printf >>"$css" "\tsrc:\n"
 
+	# add a src tag for eot before the local directive for IE9 Compat Mode
+	# ----------------------------------------------------------------------------	
+	# For each requested font format, download the font file and print the corresponding CSS statements.
+	for ((uaidx=0; uaidx < ${#formats[@]}; uaidx++)); do
+		uakey=${formats[$uaidx]}
+
+		# Generate the CSS statements required to include the downloaded file.
+		case "$uakey" in
+			eot)
+				printf >>"$css" "\tsrc: url('%s%s');\n" "${pathprefix}" "${fontnameescaped}.$uakey"
+				;;
+		esac
+	done
+
+	# ----------------------------------------------------------------------------	
+
+	printf >>"$css" "\tsrc:\n"
 	# Determine the local names for the given fonts so we can use a locally-installed font if available.
 	css_src_string=$(echo "$css_string" | grep "src:")
 	ret=0
@@ -344,29 +385,29 @@ for family in "${families[@]}"; do
 			svgname=$(echo "$file" | $ESED 's/^[^#]+#(.*)$/\1/g')
 		fi
 		# Actually download the font file
-		curl -sfL "$file" -o "${fontnameescaped}.$uakey"
+		curl -sfL "$file" -o "${destpath}${fontnameescaped}.$uakey"
 
 		# Generate the CSS statements required to include the downloaded file.
 		case "$uakey" in
 			eot)
-				printf >>"$css" "\t\turl('%s?#iefix') format('embedded-opentype')%s\n" "${fontnameescaped}.$uakey" "${terminator}"
+				printf >>"$css" "\t\turl('%s%s?#iefix') format('embedded-opentype')%s\n" "${pathprefix}" "${fontnameescaped}.$uakey" "${terminator}"
 				;;
 			woff)
-				printf >>"$css" "\t\turl('%s') format('woff')%s\n" "${fontnameescaped}.$uakey" "${terminator}"
+				printf >>"$css" "\t\turl('%s%s') format('woff')%s\n" "${pathprefix}" "${fontnameescaped}.$uakey" "${terminator}"
 				;;
 			woff2)
-				printf >>"$css" "\t\turl('%s') format('woff2')%s\n" "${fontnameescaped}.$uakey" "${terminator}"
+				printf >>"$css" "\t\turl('%s%s') format('woff2')%s\n" "${pathprefix}" "${fontnameescaped}.$uakey" "${terminator}"
 				;;
 			ttf)
-				printf >>"$css" "\t\turl('%s') format('truetype')%s\n" "${fontnameescaped}.$uakey" "${terminator}"
+				printf >>"$css" "\t\turl('%s%s') format('truetype')%s\n" "${pathprefix}" "${fontnameescaped}.$uakey" "${terminator}"
 				;;
 			svg)
-				printf >>"$css" "\t\turl('%s#%s') format('svg')%s\n" "${fontnameescaped}.${uakey}" "$svgname" "${terminator}"
+				printf >>"$css" "\t\turl('%s%s#%s') format('svg')%s\n" "${pathprefix}" "${fontnameescaped}.${uakey}" "$svgname" "${terminator}"
 				;;
 		esac
 	done
 
-	printf >>"$css" "}\n"
+	printf >>"$css" "}\n\n"
 	printf >&2 "\n"
 done
 
